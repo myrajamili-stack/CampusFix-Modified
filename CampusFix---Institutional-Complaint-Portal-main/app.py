@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, Response
 from itsdangerous import URLSafeTimedSerializer
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from flask_bcrypt import Bcrypt
@@ -6,6 +6,8 @@ from bson import ObjectId
 from datetime import datetime
 import os
 import sys
+import csv
+import io
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from flask_mail import Mail, Message
@@ -21,7 +23,7 @@ app = Flask(__name__)
 # ------------------- Flask Configs -------------------
 app.config.from_object(Config)
 
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "default_secret_key")
+app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
 
 # Email Configs
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
@@ -323,6 +325,93 @@ def register():
             flash('Registration failed. Please try again.', 'danger')
     
     return render_template('register.html')
+@app.route('/profile')
+@login_required
+def profile():
+    return render_template('profile.html')
+
+@app.route('/profile/edit', methods=['POST'])
+@login_required
+def edit_profile():
+    username = request.form.get('username', '').strip()
+    phone = request.form.get('phone', '').strip()
+
+    if not username:
+        flash('Username cannot be empty.', 'danger')
+        return redirect(url_for('profile'))
+
+    if len(username) > 50:
+        flash('Username is too long.', 'danger')
+        return redirect(url_for('profile'))
+
+    user_id = ObjectId(current_user.id)
+
+    existing = db.users.find_one({
+        'username': username,
+        '_id': {'$ne': user_id}
+    })
+
+    if existing:
+        flash('Username is already taken.', 'danger')
+        return redirect(url_for('profile'))
+
+    try:
+        db.users.update_one(
+            {'_id': user_id},
+            {'$set': {
+                'username': username,
+                'phone': phone
+            }}
+        )
+        flash('Profile updated successfully!', 'success')
+
+    except Exception as e:
+        print(f'Profile update error: {e}')
+        flash('Unable to update profile.', 'danger')
+
+    return redirect(url_for('profile'))
+
+
+@app.route('/profile/change-password', methods=['POST'])
+@login_required
+def change_password():
+    current_password = request.form.get('current_password', '')
+    new_password = request.form.get('new_password', '')
+    confirm_password = request.form.get('confirm_password', '')
+
+    user = db.users.find_one({
+        '_id': ObjectId(current_user.id)
+    })
+
+    if not user or not bcrypt.check_password_hash(
+        user['password'], current_password
+    ):
+        flash('Current password is incorrect.', 'danger')
+        return redirect(url_for('profile'))
+
+    if len(new_password) < 12:
+        flash('New password must be at least 12 characters.', 'danger')
+        return redirect(url_for('profile'))
+
+    if new_password != confirm_password:
+        flash('New passwords do not match.', 'danger')
+        return redirect(url_for('profile'))
+
+    if bcrypt.check_password_hash(user['password'], new_password):
+        flash('Choose a different password.', 'danger')
+        return redirect(url_for('profile'))
+
+    hashed_password = bcrypt.generate_password_hash(
+        new_password
+    ).decode('utf-8')
+
+    db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$set': {'password': hashed_password}}
+    )
+
+    flash('Password changed successfully!', 'success')
+    return redirect(url_for('profile'))
 
 @app.route('/logout')
 @login_required
@@ -331,7 +420,8 @@ def logout():
     flash('You have been logged out', 'success')
     return redirect(url_for('index'))
 
-@app.route('/setup-database')
+# Database setup disabled to prevent unauthorized account creation.
+# @app.route('/setup-database')
 def setup_database():
     try:
         # Create collections
@@ -738,27 +828,42 @@ def staff_dashboard():
                          category_wise=category_wise)
 
 # MISSING ROUTE ADDED HERE - manage_complaints
+
 @app.route('/staff/complaints')
 @login_required
 def manage_complaints():
-    if current_user.role != 'staff':
+    if current_user.role not in ['admin', 'staff']:
         flash('Access denied', 'danger')
         return redirect(url_for('index'))
+
     
     status = request.args.get('status', 'all')
-    query = {'assigned_to': current_user.id}
-    
-    if status != 'all':
+
+    query = {} if current_user.role == 'admin' else {
+        'assigned_to': current_user.id
+    }
+
+    if status == 'pending':
+        query['status'] = {
+            '$in': ['submitted', 'under_review', 'in_progress']
+        }
+    elif status != 'all':
         query['status'] = status
-    
+
     try:
-        complaints = list(db.complaints.find(query).sort('created_at', -1))
-        print(f"📊 Found {len(complaints)} complaints for staff {current_user.username}")
+        complaints = list(
+            db.complaints.find(query).sort('created_at', -1)
+        )
     except Exception as e:
-        print(f"❌ Error fetching complaints: {e}")
+        print(f"Error fetching complaints: {e}")
         complaints = []
-    
-    return render_template('manage_complaints.html', complaints=complaints, current_filter=status)
+
+    return render_template(
+        'manage_complaints.html',
+        complaints=complaints,
+        current_filter=status
+    )
+
 
 @app.route('/staff/complaint/<complaint_id>/update', methods=['POST'])
 @login_required
@@ -815,6 +920,72 @@ def update_complaint_status(complaint_id):
     
     return redirect(url_for('view_complaint', complaint_id=complaint_id))
 
+@app.route('/admin/generate-report')
+@login_required
+def generate_report():
+    if current_user.role != 'admin':
+        flash('Access denied', 'danger')
+        return redirect(url_for('index'))
+
+    try:
+        complaints = list(
+            db.complaints.find().sort('created_at', -1)
+        )
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        writer.writerow([
+            'Complaint ID',
+            'Title',
+            'Category',
+            'Location',
+            'Description',
+            'Status',
+            'Submitted By',
+            'Assigned To',
+            'Date Submitted',
+            'Last Updated'
+        ])
+
+        for complaint in complaints:
+            created_at = complaint.get('created_at')
+            updated_at = complaint.get('updated_at')
+
+            writer.writerow([
+                str(complaint.get('_id', '')),
+                complaint.get('title', ''),
+                complaint.get('category', ''),
+                complaint.get('location', ''),
+                complaint.get('description', ''),
+                complaint.get('status', '').replace('_', ' ').title(),
+                complaint.get('submitted_by_email', ''),
+                complaint.get('assigned_to', ''),
+                created_at.strftime('%Y-%m-%d %H:%M')
+                    if isinstance(created_at, datetime) else '',
+                updated_at.strftime('%Y-%m-%d %H:%M')
+                    if isinstance(updated_at, datetime) else ''
+            ])
+
+        filename = (
+            'CampusFix_Complaint_Report_'
+            + datetime.now().strftime('%Y%m%d_%H%M%S')
+            + '.csv'
+        )
+
+        return Response(
+            '\ufeff' + output.getvalue(),
+            mimetype='text/csv; charset=utf-8',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Cache-Control': 'no-store'
+            }
+        )
+
+    except Exception as e:
+        print(f"Report generation error: {e}")
+        flash('Unable to generate report', 'danger')
+        return redirect(url_for('admin_dashboard'))
 # Admin Routes
 @app.route('/admin/dashboard')
 @login_required
@@ -828,8 +999,10 @@ def admin_dashboard():
             'total_users': db.users.count_documents({}),
             'total_complaints': db.complaints.count_documents({}),
             'pending_complaints': db.complaints.count_documents({
-                'status': {'$in': ['submitted', 'under_review']}
-            }),
+    'status': {
+        '$in': ['submitted', 'under_review', 'in_progress']
+    }
+}),
             'resolved_complaints': db.complaints.count_documents({'status': 'resolved'}),
             'students': db.users.count_documents({'role': 'student'}),
             'staff': db.users.count_documents({'role': 'staff'})
