@@ -12,112 +12,12 @@
             <p class="text-muted">System Overview & Analytics</p>
         </div>
 
-
-<div class="d-flex align-items-center gap-2">
-    <select id="reportCategory" class="form-select">
-        <option value="All">All Categories</option>
-        <option value="Classroom">Classroom</option>
-        <option value="Laboratory">Laboratory</option>
-        <option value="Hostel">Hostel</option>
-        <option value="Mess/Food">Mess/Food</option>
-        <option value="Internet Connectivity">Internet Connectivity</option>
-        <option value="Water Supply">Water Supply</option>
-        <option value="Cleanliness">Cleanliness</option>
-        <option value="Electrical">Electrical</option>
-        <option value="Security">Security</option>
-        <option value="Library">Library</option>
-        <option value="Sports Facility">Sports Facility</option>
-        <option value="Other">Other</option>
-    </select>
-
-    <button type="button"
-            class="btn btn-primary shadow-sm report-btn"
-            onclick="downloadReport()">
-        <i class="bi bi-file-earmark-bar-graph"></i>
-        Generate Report
-    </button>
-</div>
-
-<script>
-function downloadReport() {
-    const category = document.getElementById('reportCategory').value;
-
-    window.location.href =
-        "{{ url_for('generate_report') }}?category=" +
-        encodeURIComponent(category);
-}
-</script>
-
+        <a href="{{ url_for('generate_report') }}"
+   class="btn btn-primary shadow-sm report-btn">
+    <i class="bi bi-file-earmark-bar-graph"></i>
+    Generate Report
+</a>
     </div>
-
-    <!-- IKA FEATURE: Automatic Overdue Complaint Alert -->
-    {% if overdue_count > 0 %}
-    <div class="alert alert-danger shadow-sm mb-4"
-         role="alert">
-
-        <div class="d-flex align-items-center gap-2 mb-2">
-            <i class="bi bi-exclamation-triangle-fill fs-4"></i>
-
-            <h5 class="fw-bold mb-0">
-                Overdue Complaint Alert!
-            </h5>
-        </div>
-
-        <p class="mb-3">
-            There are
-            <strong>{{ overdue_count }}</strong>
-            unresolved complaints pending for more than
-            30 days. Immediate action is required.
-        </p>
-
-        <div class="table-responsive">
-            <table class="table table-bordered table-hover bg-white mb-0">
-                <thead class="table-danger">
-                    <tr>
-                        <th>Complaint</th>
-                        <th>Category</th>
-                        <th>Status</th>
-                        <th>Days Pending</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-
-                <tbody>
-                    {% for complaint in overdue_complaints %}
-                    <tr>
-                        <td>{{ complaint.title }}</td>
-
-                        <td>{{ complaint.category }}</td>
-
-                        <td>
-                            {{ complaint.status|replace('_', ' ')|title }}
-                        </td>
-
-                        <td>
-                            <span class="badge bg-danger">
-                                {{ complaint.days_pending }} days
-                            </span>
-                        </td>
-
-                        <td>
-                            <a href="{{ url_for(
-                                'view_complaint',
-                                complaint_id=complaint._id
-                            ) }}"
-                               class="btn btn-sm btn-danger">
-                                <i class="bi bi-eye"></i>
-                                View
-                            </a>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-
-    </div>
-    {% endif %}
-    <!-- END IKA FEATURE -->
 
 
     <!-- Stat Cards -->
@@ -174,17 +74,133 @@ function downloadReport() {
         <!-- Chart -->
         <div class="col-lg-7">
             <div class="card shadow-lg chart-card animate-slide">
-                <div class="card-header bg-white">
-                    <h5 class="card-title mb-0">Complaints by Category</h5>
-                </div>
+                
+<div class="card-header bg-white">
+    <h5 class="card-title mb-3">
+        Complaints by Category
+    </h5>
 
-                <div class="card-body">
-                    <canvas
-    id="categoryChart"
-    height="250"
-    data-categories='{{ category_stats.keys() | list | tojson }}'
-    data-totals='{{ category_stats.values() | list | tojson }}'>
-</canvas>
+    <form method="GET"
+          action="{{ url_for('admin_dashboard') }}"
+          class="row g-2 align-items-end">
+
+        <div class="col-md-4">
+            <label class="form-label small">Month</label>
+            <select name="month" class="form-select form-select-sm">
+                <option value="all">All Months</option>
+                {% for month in range(1, 13) %}
+                <option value="{{ month }}"
+                    {% if selected_month == month|string %}selected{% endif %}>
+                    {{ [
+                        'January', 'February', 'March', 'April',
+                        'May', 'June', 'July', 'August',
+                        'September', 'October', 'November', 'December'
+                    ][month - 1] }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="col-md-3">
+            <label class="form-label small">Year</label>
+            <select name="year" class="form-select form-select-sm">
+                <option value="all">All Years</option>
+                {% for year in range(2024, 2031) %}
+                <option value="{{ year }}"
+                    {% if selected_year == year|string %}selected{% endif %}>
+                    {{ year }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="col-md-3">
+            <label class="form-label small">Status</label>
+            <select name="status" class="form-select form-select-sm">
+                <option value="all">All Statuses</option>
+                <option value="resolved"
+                    {% if selected_status == 'resolved' %}selected{% endif %}>
+                    Resolved
+                </option>
+                <option value="unresolved"
+                    {% if selected_status == 'unresolved' %}selected{% endif %}>
+                    Unresolved
+                </option>
+            </select>
+        </div>
+
+        <div class="col-md-2">
+            <button type="submit"
+                    class="btn btn-primary btn-sm w-100">
+                Apply
+            </button>
+        </div>
+
+    </form>
+</div>
+
+
+<div class="card-body">
+
+    <!-- Doughnut Chart -->
+    <div style="position: relative; height: 280px; width: 100%;">
+        <canvas
+            id="categoryChart"
+            data-categories='{{ category_stats.keys() | list | tojson }}'
+            data-totals='{{ category_stats.values() | list | tojson }}'>
+        </canvas>
+    </div>
+    
+<!-- MYRA FEATURE: Complaint Resolution Statistics -->
+<div class="row g-2 mt-4">
+
+    <div class="col-md-6">
+        <div class="card border-success h-100">
+            <div class="card-body text-center">
+                <h6 class="text-success">Resolved Within 30 Days</h6>
+                <h3 class="fw-bold">
+                    {{ resolution_stats.resolved_on_time }}
+                </h3>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card border-warning h-100">
+            <div class="card-body text-center">
+                <h6 class="text-warning">Resolved After 30 Days</h6>
+                <h3 class="fw-bold">
+                    {{ resolution_stats.resolved_late }}
+                </h3>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card border-primary h-100">
+            <div class="card-body text-center">
+                <h6 class="text-primary">Unresolved Within 30 Days</h6>
+                <h3 class="fw-bold">
+                    {{ resolution_stats.unresolved_on_time }}
+                </h3>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card border-danger h-100">
+            <div class="card-body text-center">
+                <h6 class="text-danger">Unresolved Over 30 Days</h6>
+                <h3 class="fw-bold">
+                    {{ resolution_stats.unresolved_overdue }}
+                </h3>
+            </div>
+        </div>
+    </div>
+
+</div>
+<!-- END MYRA FEATURE -->
+
                 </div>
             </div>
         </div>
@@ -195,8 +211,8 @@ function downloadReport() {
             <div class="card shadow-lg animate-slide">
                 <div class="card-header bg-white d-flex justify-content-between align-items-center">
                     <h5 class="card-title mb-0">Recent Complaints</h5>
-                    <a href="{{ url_for('manage_complaints') }}"
-   class="btn btn-sm btn-outline-primary">
+                    <a href="{{ url_for('manage_complaints', status='pending') }}"
+   class="text-decoration-none text-reset d-block">
     View All
 </a>
                 </div>
