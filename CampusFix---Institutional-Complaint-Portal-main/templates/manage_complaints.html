@@ -10,10 +10,8 @@
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
                     <li class="breadcrumb-item">
-<a href="{{ url_for('admin_dashboard' if current_user.role == 'admin' else 'staff_dashboard') }}">
-    Dashboard
-</a>
-</li>
+                        <a href="{{ url_for('admin_dashboard' if current_user.role == 'admin' else 'staff_dashboard') }}">Dashboard</a>
+                    </li>
                     <li class="breadcrumb-item active">Manage Complaints</li>
                 </ol>
             </nav>
@@ -25,23 +23,23 @@
         <div class="col-12">
             <ul class="nav nav-tabs">
                 <li class="nav-item">
-                    <a class="nav-link {% if current_filter == 'all' %}active{% endif %}" 
+                    <a class="nav-link {% if current_filter == 'all' %}active{% endif %}"
                        href="{{ url_for('manage_complaints') }}?status=all">All</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if current_filter == 'submitted' %}active{% endif %}" 
+                    <a class="nav-link {% if current_filter == 'submitted' %}active{% endif %}"
                        href="{{ url_for('manage_complaints') }}?status=submitted">Submitted</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if current_filter == 'under_review' %}active{% endif %}" 
+                    <a class="nav-link {% if current_filter == 'under_review' %}active{% endif %}"
                        href="{{ url_for('manage_complaints') }}?status=under_review">Under Review</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if current_filter == 'work_in_progress' %}active{% endif %}" 
+                    <a class="nav-link {% if current_filter == 'work_in_progress' %}active{% endif %}"
                        href="{{ url_for('manage_complaints') }}?status=work_in_progress">In Progress</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if current_filter == 'resolved' %}active{% endif %}" 
+                    <a class="nav-link {% if current_filter == 'resolved' %}active{% endif %}"
                        href="{{ url_for('manage_complaints') }}?status=resolved">Resolved</a>
                 </li>
             </ul>
@@ -64,6 +62,7 @@
                                 <th>Images</th>
                                 <th>Status</th>
                                 <th>Votes</th>
+                                <th>Remarks / Pending Action</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -83,8 +82,8 @@
                                         {% if complaint.images and complaint.images|length > 0 %}
                                             <div class="d-flex gap-1">
                                                 {% for image in complaint.images[:2] %}
-                                                    <img src="{{ url_for('static', filename='uploads/' + image) }}" 
-                                                         alt="img" 
+                                                    <img src="{{ url_for('static', filename='uploads/' + image) }}"
+                                                         alt="img"
                                                          style="width: 40px; height: 40px; object-fit: cover; border-radius: 3px; cursor: pointer;"
                                                          class="border"
                                                          onclick="window.open(this.src, '_blank')">
@@ -98,7 +97,7 @@
                                         {% endif %}
                                     </td>
                                     <td>
-                                        <span class="badge bg-{{ 'success' if complaint.status == 'resolved' 
+                                        <span class="badge bg-{{ 'success' if complaint.status == 'resolved'
                                                                else 'warning' if complaint.status == 'work_in_progress'
                                                                else 'info' if complaint.status == 'under_review'
                                                                else 'primary' }}">
@@ -106,8 +105,39 @@
                                         </span>
                                     </td>
                                     <td>{{ complaint.vote_count }}</td>
+                                    <td style="min-width: 290px;">
+                                        {% if complaint.get('remarks') %}
+                                            {% for item in complaint.remarks|reverse %}
+                                                <div class="border rounded p-2 mb-2 bg-light">
+                                                    <div class="small fw-bold">
+                                                        {{ item.updated_by }}
+                                                        <span class="badge bg-secondary">{{ item.role|title }}</span>
+                                                    </div>
+                                                    <div class="small mt-1" style="white-space: pre-wrap;">{{ item.remark }}</div>
+                                                    <div class="text-muted mt-1" style="font-size: 11px;">
+                                                        {{ item.timestamp.strftime('%d %b %Y, %I:%M %p') if item.timestamp else '' }}
+                                                    </div>
+                                                </div>
+                                            {% endfor %}
+                                        {% else %}
+                                            <span class="text-muted small">No remarks yet.</span>
+                                        {% endif %}
+                                        {% if complaint.status in ['submitted', 'under_review', 'work_in_progress'] %}
+                                            <form method="POST"
+                                                  action="{{ url_for('add_complaint_remark', complaint_id=complaint._id) }}">
+                                                <textarea name="remark" class="form-control form-control-sm mb-2"
+                                                          rows="3" maxlength="2000" required
+                                                          placeholder="Reason for delay or repair progress..."></textarea>
+                                                <button type="submit" class="btn btn-sm btn-outline-primary">
+                                                    <i class="bi bi-chat-left-text"></i> Add Remark
+                                                </button>
+                                            </form>
+                                        {% else %}
+                                            <span class="text-muted small">Complaint closed.</span>
+                                        {% endif %}
+                                    </td>
                                     <td>
-                                        <a href="{{ url_for('view_complaint', complaint_id=complaint._id) }}" 
+                                        <a href="{{ url_for('view_complaint', complaint_id=complaint._id) }}"
                                            class="btn btn-sm btn-primary">
                                             <i class="bi bi-eye"></i> View
                                         </a>
@@ -118,9 +148,7 @@
                     </table>
                 </div>
             {% else %}
-                <div class="alert alert-info">
-                    No complaints found.
-                </div>
+                <div class="alert alert-info">No complaints found.</div>
             {% endif %}
         </div>
     </div>

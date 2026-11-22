@@ -865,6 +865,53 @@ def manage_complaints():
     )
 
 
+# Add remarks to pending complaints without changing their status.
+@app.route('/complaint/<complaint_id>/remark', methods=['POST'])
+@login_required
+def add_complaint_remark(complaint_id):
+    if current_user.role not in ['admin', 'staff']:
+        flash('Access denied', 'danger')
+        return redirect(url_for('index'))
+
+    remark = request.form.get('remark', '').strip()
+    if not remark or len(remark) > 2000:
+        flash('Please enter a remark of up to 2000 characters.', 'danger')
+        return redirect(url_for('manage_complaints'))
+
+    if not ObjectId.is_valid(complaint_id):
+        flash('Invalid complaint ID.', 'danger')
+        return redirect(url_for('manage_complaints'))
+
+    query = {
+        '_id': ObjectId(complaint_id),
+        'status': {'$in': ['submitted', 'under_review', 'work_in_progress']}
+    }
+    if current_user.role == 'staff':
+        query['assigned_to'] = current_user.id
+
+    entry = {
+        'remark': remark,
+        'updated_by': current_user.username,
+        'role': current_user.role,
+        'timestamp': datetime.utcnow()
+    }
+
+    try:
+        result = db.complaints.update_one(query, {
+            '$push': {'remarks': entry},
+            '$set': {'updated_at': datetime.utcnow()}
+        })
+        if result.modified_count:
+            flash('Remark added successfully.', 'success')
+        else:
+            flash('Complaint not found, closed, or not assigned to you.', 'warning')
+    except Exception as e:
+        print(f'Error saving complaint remark: {e}')
+        flash('Unable to save remark.', 'danger')
+
+    return redirect(url_for('manage_complaints'))
+
+
 @app.route('/staff/complaint/<complaint_id>/update', methods=['POST'])
 @login_required
 def update_complaint_status(complaint_id):
