@@ -1052,6 +1052,18 @@ def admin_dashboard():
         flash('Access denied', 'danger')
         return redirect(url_for('index'))
 
+    
+    selected_month = 'all'
+    selected_year = 'all'
+    selected_status = 'all'
+
+    resolution_stats = {
+        'resolved_on_time': 0,
+        'resolved_late': 0,
+        'unresolved_on_time': 0,
+        'unresolved_overdue': 0
+    }
+
     try:
         # Existing dashboard statistics
         pending_statuses = [
@@ -1059,6 +1071,7 @@ def admin_dashboard():
             'under_review',
             'in_progress'
         ]
+
 
         stats = {
             'total_users': db.users.count_documents({}),
@@ -1083,10 +1096,121 @@ def admin_dashboard():
             .limit(10)
         )
 
+        
+        # MYRA FEATURE: Filter complaints by submission month,
+        # year and current resolution status.
+        selected_month = request.args.get('month', 'all')
+        selected_year = request.args.get('year', 'all')
+        selected_status = request.args.get('status', 'all')
+
+        if selected_month not in ['all'] + [
+            str(m) for m in range(1, 13)
+        ]:
+            selected_month = 'all'
+
+        if selected_year != 'all' and (
+            not selected_year.isdigit()
+            or len(selected_year) != 4
+        ):
+            selected_year = 'all'
+
+        if selected_status not in ['all', 'resolved', 'unresolved']:
+            selected_status = 'all'
+
+        # Use MongoDB's existing complaint creation date.
+        date_query = {}
+
+        if selected_year != 'all':
+            year = int(selected_year)
+
+            if selected_month != 'all':
+                month = int(selected_month)
+                start_date = datetime(year, month, 1)
+
+                if month == 12:
+                    end_date = datetime(year + 1, 1, 1)
+                else:
+                    end_date = datetime(year, month + 1, 1)
+            else:
+                start_date = datetime(year, 1, 1)
+                end_date = datetime(year + 1, 1, 1)
+
+            date_query['created_at'] = {
+                '$gte': start_date,
+                '$lt': end_date
+            }
+
+        elif selected_month != 'all':
+            # Match the selected month across all years.
+            date_query['$expr'] = {
+                '$eq': [
+                    {'$month': '$created_at'},
+                    int(selected_month)
+                ]
+            }
+
+        if selected_status == 'resolved':
+            date_query['status'] = 'resolved'
+        elif selected_status == 'unresolved':
+            date_query['status'] = {'$ne': 'resolved'}
+
+        filtered_complaints = list(db.complaints.find(date_query))
+
+        print("MYRA DEBUG - Filter:", date_query)
+        print("MYRA DEBUG - Complaints found:", len(filtered_complaints))
+
+        # MYRA FEATURE: Complaint resolution performance
+        resolution_stats = {
+            'resolved_on_time': 0,
+            'resolved_late': 0,
+            'unresolved_on_time': 0,
+            'unresolved_overdue': 0
+        }
+
+        current_date = datetime.utcnow()
+
+        for complaint in filtered_complaints:
+            created_at = complaint.get('created_at')
+
+            if not isinstance(created_at, datetime):
+                continue
+
+            if complaint.get('status') == 'resolved':
+                # Find the most recent resolution event.
+                resolved_at = None
+
+                for entry in reversed(complaint.get('timeline', [])):
+                    if entry.get('status') == 'resolved':
+                        resolved_at = entry.get('timestamp')
+                        break
+
+                if not isinstance(resolved_at, datetime):
+                    # No reliable resolution date available.
+                    continue
+
+                days_taken = (resolved_at - created_at).total_seconds() / 86400
+
+                if 0 <= days_taken <= 30:
+                    resolution_stats['resolved_on_time'] += 1
+                elif days_taken > 30:
+                    resolution_stats['resolved_late'] += 1
+
+            else:
+                days_pending = (current_date - created_at).total_seconds() / 86400
+
+                if days_pending > 30:
+                    resolution_stats['unresolved_overdue'] += 1
+                else:
+                    resolution_stats['unresolved_on_time'] += 1
+
         category_stats = {}
-        for complaint in db.complaints.find():
-            cat = complaint['category']
-            category_stats[cat] = category_stats.get(cat, 0) + 1
+
+        for complaint in filtered_complaints:
+            category = complaint.get('category', 'Other')
+            category_stats[category] = (
+                category_stats.get(category, 0) + 1
+            )
+
 
         # IKA FEATURE: Automatic overdue complaint alert
         # Complaints older than 30 days are considered overdue.
@@ -1110,6 +1234,7 @@ def admin_dashboard():
 
         overdue_count = len(overdue_complaints)
 
+    
     except Exception as e:
         print(f"Admin dashboard error: {e}")
         stats = {}
@@ -1124,8 +1249,13 @@ def admin_dashboard():
         recent=recent,
         category_stats=category_stats,
         overdue_complaints=overdue_complaints,
-        overdue_count=overdue_count
+        overdue_count=overdue_count,
+        selected_month=selected_month,
+        selected_year=selected_year,
+        selected_status=selected_status,
+        resolution_stats=resolution_stats
     )
+
 
 @app.route('/admin/users')
 @login_required
