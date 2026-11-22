@@ -3,7 +3,7 @@ from itsdangerous import URLSafeTimedSerializer
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from flask_bcrypt import Bcrypt
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import sys
 import csv
@@ -1046,39 +1046,86 @@ def generate_report():
 # Admin Routes
 @app.route('/admin/dashboard')
 @login_required
+
 def admin_dashboard():
     if current_user.role != 'admin':
         flash('Access denied', 'danger')
         return redirect(url_for('index'))
-    
+
     try:
+        # Existing dashboard statistics
+        pending_statuses = [
+            'submitted',
+            'under_review',
+            'in_progress'
+        ]
+
         stats = {
             'total_users': db.users.count_documents({}),
             'total_complaints': db.complaints.count_documents({}),
             'pending_complaints': db.complaints.count_documents({
-    'status': {
-        '$in': ['submitted', 'under_review', 'in_progress']
-    }
-}),
-            'resolved_complaints': db.complaints.count_documents({'status': 'resolved'}),
-            'students': db.users.count_documents({'role': 'student'}),
-            'staff': db.users.count_documents({'role': 'staff'})
+                'status': {'$in': pending_statuses}
+            }),
+            'resolved_complaints': db.complaints.count_documents({
+                'status': 'resolved'
+            }),
+            'students': db.users.count_documents({
+                'role': 'student'
+            }),
+            'staff': db.users.count_documents({
+                'role': 'staff'
+            })
         }
-        
-        recent = list(db.complaints.find().sort('created_at', -1).limit(10))
-        
+
+        recent = list(
+            db.complaints.find()
+            .sort('created_at', -1)
+            .limit(10)
+        )
+
         category_stats = {}
         for complaint in db.complaints.find():
             cat = complaint['category']
             category_stats[cat] = category_stats.get(cat, 0) + 1
-        
+
+        # IKA FEATURE: Automatic overdue complaint alert
+        # Complaints older than 30 days are considered overdue.
+        current_date = datetime.utcnow()
+        overdue_date = current_date - timedelta(days=30)
+
+        overdue_complaints = list(db.complaints.find({
+            'status': {'$in': pending_statuses},
+            'created_at': {'$lt': overdue_date}
+        }).sort('created_at', 1))
+
+        for complaint in overdue_complaints:
+            created_date = complaint.get('created_at')
+
+            if created_date:
+                complaint['days_pending'] = (
+                    current_date - created_date
+                ).days
+            else:
+                complaint['days_pending'] = 0
+
+        overdue_count = len(overdue_complaints)
+
     except Exception as e:
         print(f"Admin dashboard error: {e}")
         stats = {}
         recent = []
         category_stats = {}
-    
-    return render_template('admin_dashboard.html', stats=stats, recent=recent, category_stats=category_stats)
+        overdue_complaints = []
+        overdue_count = 0
+
+    return render_template(
+        'admin_dashboard.html',
+        stats=stats,
+        recent=recent,
+        category_stats=category_stats,
+        overdue_complaints=overdue_complaints,
+        overdue_count=overdue_count
+    )
 
 @app.route('/admin/users')
 @login_required
