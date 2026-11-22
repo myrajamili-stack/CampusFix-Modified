@@ -928,8 +928,15 @@ def generate_report():
         return redirect(url_for('index'))
 
     try:
+        category = request.args.get('category', 'All')
+
+        if category == 'All':
+            query = {}
+        else:
+            query = {'category': category}
+
         complaints = list(
-            db.complaints.find().sort('created_at', -1)
+            db.complaints.find(query).sort('created_at', -1)
         )
 
         output = io.StringIO()
@@ -969,6 +976,8 @@ def generate_report():
 
         filename = (
             'CampusFix_Complaint_Report_'
+            + category.replace(' ', '_').replace('/', '_')
+            + '_'
             + datetime.now().strftime('%Y%m%d_%H%M%S')
             + '.csv'
         )
@@ -986,6 +995,7 @@ def generate_report():
         print(f"Report generation error: {e}")
         flash('Unable to generate report', 'danger')
         return redirect(url_for('admin_dashboard'))
+
 # Admin Routes
 @app.route('/admin/dashboard')
 @login_required

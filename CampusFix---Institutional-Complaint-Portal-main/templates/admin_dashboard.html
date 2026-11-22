@@ -12,11 +12,42 @@
             <p class="text-muted">System Overview & Analytics</p>
         </div>
 
-        <a href="{{ url_for('generate_report') }}"
-   class="btn btn-primary shadow-sm report-btn">
-    <i class="bi bi-file-earmark-bar-graph"></i>
-    Generate Report
-</a>
+
+<div class="d-flex align-items-center gap-2">
+    <select id="reportCategory" class="form-select">
+        <option value="All">All Categories</option>
+        <option value="Classroom">Classroom</option>
+        <option value="Laboratory">Laboratory</option>
+        <option value="Hostel">Hostel</option>
+        <option value="Mess/Food">Mess/Food</option>
+        <option value="Internet Connectivity">Internet Connectivity</option>
+        <option value="Water Supply">Water Supply</option>
+        <option value="Cleanliness">Cleanliness</option>
+        <option value="Electrical">Electrical</option>
+        <option value="Security">Security</option>
+        <option value="Library">Library</option>
+        <option value="Sports Facility">Sports Facility</option>
+        <option value="Other">Other</option>
+    </select>
+
+    <button type="button"
+            class="btn btn-primary shadow-sm report-btn"
+            onclick="downloadReport()">
+        <i class="bi bi-file-earmark-bar-graph"></i>
+        Generate Report
+    </button>
+</div>
+
+<script>
+function downloadReport() {
+    const category = document.getElementById('reportCategory').value;
+
+    window.location.href =
+        "{{ url_for('generate_report') }}?category=" +
+        encodeURIComponent(category);
+}
+</script>
+
     </div>
 
 
