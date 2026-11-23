@@ -3,7 +3,7 @@ from itsdangerous import URLSafeTimedSerializer
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from flask_bcrypt import Bcrypt
 from bson import ObjectId
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 import sys
 import csv
@@ -23,7 +23,7 @@ app = Flask(__name__)
 # ------------------- Flask Configs -------------------
 app.config.from_object(Config)
 
-app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY") or Config.SECRET_KEY
 
 # Email Configs
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
@@ -845,7 +845,7 @@ def manage_complaints():
 
     if status == 'pending':
         query['status'] = {
-            '$in': ['submitted', 'under_review', 'in_progress']
+            '$in': ['submitted', 'under_review', 'work_in_progress', 'in_progress']
         }
     elif status != 'all':
         query['status'] = status
@@ -865,52 +865,96 @@ def manage_complaints():
     )
 
 
-# Add remarks to pending complaints without changing their status.
+# Admin-only remarks for pending complaints. Staff can view remarks in Manage Complaints.
 @app.route('/complaint/<complaint_id>/remark', methods=['POST'])
 @login_required
-def add_complaint_remark(complaint_id):
-    if current_user.role not in ['admin', 'staff']:
-        flash('Access denied', 'danger')
-        return redirect(url_for('index'))
 
-    remark = request.form.get('remark', '').strip()
-    if not remark or len(remark) > 2000:
-        flash('Please enter a remark of up to 2000 characters.', 'danger')
+def add_complaint_remark(complaint_id):
+    if current_user.role != 'admin':
+        flash('Only administrators can manage complaint remarks.', 'danger')
         return redirect(url_for('manage_complaints'))
 
-    if not ObjectId.is_valid(complaint_id):
+    remark = request.form.get('remark', '').strip()
+    remark_index = request.form.get('remark_index', '').strip()
+
+    try:
+        complaint_id_obj = ObjectId(complaint_id)
+    except Exception:
         flash('Invalid complaint ID.', 'danger')
         return redirect(url_for('manage_complaints'))
 
-    query = {
-        '_id': ObjectId(complaint_id),
-        'status': {'$in': ['submitted', 'under_review', 'work_in_progress']}
-    }
-    if current_user.role == 'staff':
-        query['assigned_to'] = current_user.id
-
-    entry = {
-        'remark': remark,
-        'updated_by': current_user.username,
-        'role': current_user.role,
-        'timestamp': datetime.utcnow()
-    }
-
     try:
-        result = db.complaints.update_one(query, {
-            '$push': {'remarks': entry},
-            '$set': {'updated_at': datetime.utcnow()}
-        })
-        if result.modified_count:
-            flash('Remark added successfully.', 'success')
+        complaint = db.complaints.find_one({'_id': complaint_id_obj})
+
+        if not complaint:
+            flash('Complaint not found.', 'warning')
+            return redirect(url_for('manage_complaints'))
+
+        remarks = complaint.get('remarks', [])
+
+        # Edit or delete an existing remark
+        if remark_index != '':
+            try:
+                index = int(remark_index)
+            except ValueError:
+                flash('Invalid remark selection.', 'danger')
+                return redirect(url_for('manage_complaints'))
+
+            if index < 0 or index >= len(remarks):
+                flash('Remark not found.', 'warning')
+                return redirect(url_for('manage_complaints'))
+
+            if len(remark) > 2000:
+                flash('Remark must not exceed 2000 characters.', 'danger')
+                return redirect(url_for('manage_complaints'))
+
+            if remark == '':
+                # Delete the selected remark
+                remarks.pop(index)
+                db.complaints.update_one(
+                    {'_id': complaint_id_obj},
+                    {'$set': {'remarks': remarks}}
+                )
+                flash('Remark deleted successfully.', 'success')
+
+            else:
+                # Update the selected remark
+                remarks[index]['remark'] = remark
+                remarks[index]['updated_by'] = current_user.username
+                remarks[index]['role'] = current_user.role
+                remarks[index]['timestamp'] = datetime.utcnow()
+
+                db.complaints.update_one(
+                    {'_id': complaint_id_obj},
+                    {'$set': {'remarks': remarks}}
+                )
+                flash('Remark updated successfully.', 'success')
+
         else:
-            flash('Complaint not found, closed, or not assigned to you.', 'warning')
+            # Add a new remark
+            if not remark or len(remark) > 2000:
+                flash('Please enter a remark of up to 2000 characters.', 'danger')
+                return redirect(url_for('manage_complaints'))
+
+            entry = {
+                'remark': remark,
+                'updated_by': current_user.username,
+                'role': current_user.role,
+                'timestamp': datetime.utcnow()
+            }
+
+            db.complaints.update_one(
+                {'_id': complaint_id_obj},
+                {'$push': {'remarks': entry}}
+            )
+
+            flash('Remark added successfully.', 'success')
+
     except Exception as e:
-        print(f'Error saving complaint remark: {e}')
-        flash('Unable to save remark.', 'danger')
+        print(f'Error managing complaint remark: {e}')
+        flash('Unable to manage complaint remark.', 'danger')
 
     return redirect(url_for('manage_complaints'))
-
 
 @app.route('/staff/complaint/<complaint_id>/update', methods=['POST'])
 @login_required
@@ -1046,216 +1090,77 @@ def generate_report():
 # Admin Routes
 @app.route('/admin/dashboard')
 @login_required
-
 def admin_dashboard():
     if current_user.role != 'admin':
         flash('Access denied', 'danger')
         return redirect(url_for('index'))
 
-    
-    selected_month = 'all'
-    selected_year = 'all'
-    selected_status = 'all'
-
-    resolution_stats = {
-        'resolved_on_time': 0,
-        'resolved_late': 0,
-        'unresolved_on_time': 0,
-        'unresolved_overdue': 0
-    }
-
     try:
-        # Existing dashboard statistics
-        pending_statuses = [
-            'submitted',
-            'under_review',
-            'in_progress'
-        ]
-
-
         stats = {
             'total_users': db.users.count_documents({}),
             'total_complaints': db.complaints.count_documents({}),
             'pending_complaints': db.complaints.count_documents({
-                'status': {'$in': pending_statuses}
+                'status': {
+                    '$in': ['submitted', 'under_review', 'work_in_progress', 'in_progress']
+                }
             }),
-            'resolved_complaints': db.complaints.count_documents({
-                'status': 'resolved'
-            }),
-            'students': db.users.count_documents({
-                'role': 'student'
-            }),
-            'staff': db.users.count_documents({
-                'role': 'staff'
-            })
+            'resolved_complaints': db.complaints.count_documents({'status': 'resolved'}),
+            'students': db.users.count_documents({'role': 'student'}),
+            'staff': db.users.count_documents({'role': 'staff'})
         }
 
-        recent = list(
-            db.complaints.find()
-            .sort('created_at', -1)
-            .limit(10)
-        )
-
-        
-        # MYRA FEATURE: Filter complaints by submission month,
-        # year and current resolution status.
-        selected_month = request.args.get('month', 'all')
-        selected_year = request.args.get('year', 'all')
-        selected_status = request.args.get('status', 'all')
-
-        if selected_month not in ['all'] + [
-            str(m) for m in range(1, 13)
-        ]:
-            selected_month = 'all'
-
-        if selected_year != 'all' and (
-            not selected_year.isdigit()
-            or len(selected_year) != 4
-        ):
-            selected_year = 'all'
-
-        if selected_status not in ['all', 'resolved', 'unresolved']:
-            selected_status = 'all'
-
-        # Use MongoDB's existing complaint creation date.
-        date_query = {}
-
-        if selected_year != 'all':
-            year = int(selected_year)
-
-            if selected_month != 'all':
-                month = int(selected_month)
-                start_date = datetime(year, month, 1)
-
-                if month == 12:
-                    end_date = datetime(year + 1, 1, 1)
-                else:
-                    end_date = datetime(year, month + 1, 1)
-            else:
-                start_date = datetime(year, 1, 1)
-                end_date = datetime(year + 1, 1, 1)
-
-            date_query['created_at'] = {
-                '$gte': start_date,
-                '$lt': end_date
-            }
-
-        elif selected_month != 'all':
-            # Match the selected month across all years.
-            date_query['$expr'] = {
-                '$eq': [
-                    {'$month': '$created_at'},
-                    int(selected_month)
-                ]
-            }
-
-        if selected_status == 'resolved':
-            date_query['status'] = 'resolved'
-        elif selected_status == 'unresolved':
-            date_query['status'] = {'$ne': 'resolved'}
-
-        filtered_complaints = list(db.complaints.find(date_query))
-
-        print("MYRA DEBUG - Filter:", date_query)
-        print("MYRA DEBUG - Complaints found:", len(filtered_complaints))
-
-        # MYRA FEATURE: Complaint resolution performance
-        resolution_stats = {
-            'resolved_on_time': 0,
-            'resolved_late': 0,
-            'unresolved_on_time': 0,
-            'unresolved_overdue': 0
-        }
-
-        current_date = datetime.utcnow()
-
-        for complaint in filtered_complaints:
-            created_at = complaint.get('created_at')
-
-            if not isinstance(created_at, datetime):
-                continue
-
-            if complaint.get('status') == 'resolved':
-                # Find the most recent resolution event.
-                resolved_at = None
-
-                for entry in reversed(complaint.get('timeline', [])):
-                    if entry.get('status') == 'resolved':
-                        resolved_at = entry.get('timestamp')
-                        break
-
-                if not isinstance(resolved_at, datetime):
-                    # No reliable resolution date available.
-                    continue
-
-                days_taken = (resolved_at - created_at).total_seconds() / 86400
-
-                if 0 <= days_taken <= 30:
-                    resolution_stats['resolved_on_time'] += 1
-                elif days_taken > 30:
-                    resolution_stats['resolved_late'] += 1
-
-            else:
-                days_pending = (current_date - created_at).total_seconds() / 86400
-
-                if days_pending > 30:
-                    resolution_stats['unresolved_overdue'] += 1
-                else:
-                    resolution_stats['unresolved_on_time'] += 1
+        recent = list(db.complaints.find().sort('created_at', -1).limit(10))
 
         category_stats = {}
+        for complaint in db.complaints.find():
+            cat = complaint['category']
+            category_stats[cat] = category_stats.get(cat, 0) + 1
 
-        for complaint in filtered_complaints:
-            category = complaint.get('category', 'Other')
-            category_stats[category] = (
-                category_stats.get(category, 0) + 1
+        # MYRA FEATURE: Complaint Resolution Statistics
+        resolution_stats = {
+            'resolved_on_time': 0,
+            'resolved_late': 0
+        }
+
+        resolved_complaints = db.complaints.find({'status': 'resolved'})
+
+        for complaint in resolved_complaints:
+            created_at = complaint.get('created_at')
+
+            resolved_at = next(
+                (
+                    entry.get('timestamp')
+                    for entry in reversed(complaint.get('timeline', []))
+                    if entry.get('status') == 'resolved'
+                ),
+                complaint.get('updated_at')
             )
 
+            if isinstance(created_at, datetime) and isinstance(resolved_at, datetime):
+                resolution_days = (resolved_at - created_at).days
 
-        # IKA FEATURE: Automatic overdue complaint alert
-        # Complaints older than 30 days are considered overdue.
-        current_date = datetime.utcnow()
-        overdue_date = current_date - timedelta(days=30)
+                if resolution_days <= 30:
+                    resolution_stats['resolved_on_time'] += 1
+                else:
+                    resolution_stats['resolved_late'] += 1
 
-        overdue_complaints = list(db.complaints.find({
-            'status': {'$in': pending_statuses},
-            'created_at': {'$lt': overdue_date}
-        }).sort('created_at', 1))
-
-        for complaint in overdue_complaints:
-            created_date = complaint.get('created_at')
-
-            if created_date:
-                complaint['days_pending'] = (
-                    current_date - created_date
-                ).days
-            else:
-                complaint['days_pending'] = 0
-
-        overdue_count = len(overdue_complaints)
-
-    
     except Exception as e:
         print(f"Admin dashboard error: {e}")
         stats = {}
         recent = []
         category_stats = {}
-        overdue_complaints = []
-        overdue_count = 0
+        resolution_stats = {
+            'resolved_on_time': 0,
+            'resolved_late': 0
+        }
 
     return render_template(
         'admin_dashboard.html',
         stats=stats,
         recent=recent,
         category_stats=category_stats,
-        overdue_complaints=overdue_complaints,
-        overdue_count=overdue_count,
-        selected_month=selected_month,
-        selected_year=selected_year,
-        selected_status=selected_status,
         resolution_stats=resolution_stats
     )
-
 
 @app.route('/admin/users')
 @login_required
